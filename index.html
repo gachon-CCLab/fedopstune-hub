@@ -344,17 +344,21 @@
           <div class="text-slate-400 text-xs space-y-1">
             <div>Unzip <code class="text-blue-300">FedopsTune.zip</code></div>
             <div><code class="text-slate-300">pip install -r requirements.txt</code></div>
-            <div class="pt-1 text-slate-500">Install framework once — no path editing needed:</div>
-            <div><code class="text-slate-300">pip install -e path/to/fedops-vlm-framework</code></div>
-            <div class="pt-1 text-slate-500">If using source clone instead:</div>
-            <div><code class="text-slate-300">pip install -e path/to/fedops-pypi</code></div>
+            <div class="text-slate-500">(installs fedops, flwr, torch, transformers etc. automatically)</div>
+            <div class="pt-1"><code class="text-slate-300">pip install -e path/to/fedops-vlm-framework</code></div>
+            <div class="text-slate-500">(must install from source — not on PyPI)</div>
           </div>
         </div>
         <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
           <div class="text-2xl mb-2">🖥️</div>
           <div class="font-medium text-slate-200 mb-1">2. Start Server (K8s)</div>
           <div class="text-slate-400 text-xs space-y-1">
-            <div>Copy folder to K8s pod</div>
+            <div>First, create a task at:</div>
+            <div><a href="https://ccl.gachon.ac.kr/fedops/task" target="_blank"
+                    class="text-blue-400 hover:text-blue-300 underline break-all">
+              ccl.gachon.ac.kr/fedops/task
+            </a></div>
+            <div class="pt-1">Then copy folder to K8s pod and run:</div>
             <div><code class="text-slate-300">python server_main.py</code></div>
             <div>Server listens on <code class="text-blue-300">:8080</code></div>
           </div>
