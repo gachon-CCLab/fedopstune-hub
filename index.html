@@ -345,8 +345,8 @@
             <div>Unzip <code class="text-blue-300">FedopsTune.zip</code></div>
             <div><code class="text-slate-300">pip install -r requirements.txt</code></div>
             <div class="text-slate-500">(installs fedops, flwr, torch, transformers etc. automatically)</div>
-            <div class="pt-1"><code class="text-slate-300">pip install -e path/to/fedops-vlm-framework</code></div>
-            <div class="text-slate-500">(must install from source — not on PyPI)</div>
+            <div class="pt-1"><code class="text-slate-300">pip install fedops-vlm-framework</code></div>
+            <div class="text-slate-500">(available on PyPI — no source clone needed)</div>
           </div>
         </div>
         <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
@@ -407,17 +407,15 @@ import logging
 import os
 import sys
 
-# ---- fedops-vlm-framework import ----
-# Option A (recommended): pip install -e path/to/fedops-vlm-framework
-# Option B (source): set FRAMEWORK_PATH below to your local clone
 try:
-    import fedops_vlm_framework  # noqa: F401 — check it's importable
+    import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    FRAMEWORK_PATH = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../fedops-vlm-framework")
+    raise ImportError(
+        "\n\nfedops-vlm-framework is not installed.\n"
+        "Install it with:\n"
+        "   pip install fedops-vlm-framework\n"
+        "Then re-run this script.\n"
     )
-    if FRAMEWORK_PATH not in sys.path:
-        sys.path.insert(0, FRAMEWORK_PATH)
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -491,10 +489,12 @@ import sys
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../fedops-vlm-framework")
-    ))
+    raise ImportError(
+        "\n\nfedops-vlm-framework is not installed.\n"
+        "Install it with:\n"
+        "   pip install fedops-vlm-framework\n"
+        "Then re-run this script.\n"
+    )
 
 import hydra
 import numpy as np
@@ -925,10 +925,12 @@ import sys
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../fedops-vlm-framework")
-    ))
+    raise ImportError(
+        "\n\nfedops-vlm-framework is not installed.\n"
+        "Install it with:\n"
+        "   pip install fedops-vlm-framework\n"
+        "Then re-run this script.\n"
+    )
 
 from omegaconf import DictConfig
 from fedops_vlm_framework.core.registry import MODEL_PLUGINS, DATASET_PLUGINS
@@ -998,10 +1000,12 @@ import sys
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../fedops-vlm-framework")
-    ))
+    raise ImportError(
+        "\n\nfedops-vlm-framework is not installed.\n"
+        "Install it with:\n"
+        "   pip install fedops-vlm-framework\n"
+        "Then re-run this script.\n"
+    )
 
 from omegaconf import OmegaConf
 from fedops_vlm_framework.core.registry import MODEL_PLUGINS
@@ -1090,10 +1094,9 @@ boto3>=1.24.0
 scikit-learn
 numpy>=1.24.0
 
-# ---- local install (editable) ---------------------------------
-# Run once from the repo root before training:
-#   pip install -e path/to/fedops-vlm-framework
-#   pip install -e path/to/fedops-pypi
+# ---- additional installs --------------------------------------
+# Run once before training:
+#   pip install fedops-vlm-framework
 # ---------------------------------------------------------------
 </script>
 
@@ -1346,13 +1349,7 @@ Downloaded from FedopsTune Hub.
 1. Install dependencies:
    pip install -r requirements.txt
 
-   Install the framework (only needed once — no path editing needed):
-   pip install -e path/to/fedops-vlm-framework
-   pip install -e path/to/fedops-pypi
-
-   The Python files will automatically find the framework if it is
-   pip-installed. If not installed, they fall back to ../fedops-vlm-framework
-   relative to the FedopsTune folder.
+   pip install fedops-vlm-framework
 
 ${m.hasShapes ? '2. parameter_shapes.json is already included.\n' : '2. Generate parameter shapes (run ONCE before server start):\n   python generate_paramshape.py\n'}
 3. Start FL Server (K8s pod or local):
