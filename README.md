@@ -1,2 +1,2 @@
-# fedopaMultimodal Setup
+# fedops-Multimodal Setup
 FedOpsMultimodal website
