@@ -289,9 +289,9 @@
                   class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:outline-none focus:border-blue-500 mono"
                   onchange="updatePreview()">
             <option value="fedavg" selected>FedAvg (baseline)</option>
-            <option value="pafa">Ours (component-aware aggregation)</option>
+            <option value="pafa">FedMAP — Pair-Aware Federated Aggregation (ours)</option>
           </select>
-          <p class="text-xs text-slate-500 mt-1">PAFA-QP solves separate QPs for LoRA and projector — better for non-IID</p>
+          <p class="text-xs text-slate-500 mt-1">FedMAP solves a QP each round to minimise directional variance — better for cross-domain non-IID</p>
         </div>
 
         <div>
@@ -442,6 +442,13 @@ import logging
 import os
 import sys
 
+# Hydra changes os.getcwd() when @hydra.main runs, which breaks local imports
+# (e.g. PAFA.py). Pin the script's own directory onto sys.path now, before Hydra
+# can redirect the working directory.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
@@ -498,10 +505,10 @@ if __name__ == "__main__":
   <script type="application/x-template" id="tpl-client-main">"""FedopsTune FL Client entry point.
 
 Flow per FL round (handled internally by FedOps):
-  1. FLClientTask receives global LoRA parameters from server
+  1. FLClientTask receives global parameters from server
   2. Calls finetune_vlm(model, trainset, processor, None, collate_fn)
-  3. Extracts updated LoRA params via get_peft_model_state_dict
-  4. Sends parameters back to server for FedAvg aggregation
+  3. Extracts updated LoRA + projector params (if parameter_names.json exists)
+     or LoRA-only params (fallback) and sends to server for aggregation
 
 Environment variables:
   FEDOPS_PARTITION_ID    : which data shard this client uses (default 0)
@@ -516,24 +523,107 @@ Run:
     python client_manager_main.py
 """
 
+import json
 import logging
 import os
 import random
 import sys
 
+# Pin script directory on sys.path before Hydra changes cwd
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    raise ImportError(
-        "\n\nfedops-vlm-framework is not installed.\n"
-        "Install it with:\n"
-        "   pip install fedops-vlm-framework\n"
-        "Then re-run this script.\n"
-    )
+    sys.path.insert(0, os.path.abspath(
+        os.path.join(_SCRIPT_DIR, "../fedops-vlm-framework")
+    ))
 
-import hydra
 import numpy as np
 import torch
+from peft import get_peft_model_state_dict, set_peft_model_state_dict
+from fedops.client import client_utils
+
+# ── LoRA + Projector federation monkey-patch ──────────────────────────────────
+# FedOps uses get_peft_model_state_dict which only returns LoRA params.
+# If parameter_names.json exists (created by generate_paramshape.py), we
+# override get/set to include projector weights so they are federated too.
+
+_NAMES_FILE = os.path.join(_SCRIPT_DIR, "parameter_names.json")
+_param_names = None
+
+
+def _load_param_names():
+    global _param_names
+    if _param_names is None and os.path.exists(_NAMES_FILE):
+        with open(_NAMES_FILE) as f:
+            _param_names = json.load(f)
+    return _param_names
+
+
+def _get_parameters_lora_projector(model):
+    names = _load_param_names()
+    if names is None:
+        # Fallback: LoRA only (compatible with shipped parameter_shapes.json)
+        state = get_peft_model_state_dict(model)
+        return [v.cpu().numpy() for v in state.values()]
+
+    lora = dict(get_peft_model_state_dict(model))
+    proj = {
+        n: p.detach().cpu()
+        for n, p in model.named_parameters()
+        if "multi_modal_projector" in n and p.requires_grad
+    }
+    combined = {**lora, **proj}
+    return [
+        combined[n].numpy() if n in combined else np.zeros(1, dtype=np.float32)
+        for n in names
+    ]
+
+
+def _set_parameters_lora_projector(model, parameters):
+    names = _load_param_names()
+    if names is None:
+        # Fallback: LoRA only
+        lora_keys = list(get_peft_model_state_dict(model).keys())
+        set_peft_model_state_dict(
+            model, {k: torch.tensor(v) for k, v in zip(lora_keys, parameters)}
+        )
+        return
+
+    lora_d, proj_d = {}, {}
+    for name, arr in zip(names, parameters):
+        if "lora_" in name:
+            lora_d[name] = torch.tensor(arr)
+        elif "multi_modal_projector" in name:
+            proj_d[name] = torch.tensor(arr)
+
+    if lora_d:
+        set_peft_model_state_dict(model, lora_d)
+    if proj_d:
+        model.load_state_dict(proj_d, strict=False)
+
+
+client_utils.get_parameters_for_llm = _get_parameters_lora_projector
+client_utils.set_parameters_for_llm = _set_parameters_lora_projector
+
+_names = _load_param_names()
+if _names:
+    n_lora = sum(1 for n in _names if "lora_" in n)
+    n_proj = sum(1 for n in _names if "multi_modal_projector" in n)
+    logging.getLogger(__name__).info(
+        "[client_main] LoRA+Projector federation enabled: %d LoRA + %d projector params",
+        n_lora, n_proj,
+    )
+else:
+    logging.getLogger(__name__).info(
+        "[client_main] LoRA-only federation (run generate_paramshape.py to enable projector)"
+    )
+# ── end monkey-patch ──────────────────────────────────────────────────────────
+
+import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from fedops_vlm_framework.core.registry import MODEL_PLUGINS, DATASET_PLUGINS
@@ -588,7 +678,6 @@ def main(cfg: DictConfig) -> None:
     )
 
     finetune_vlm_fn = models.finetune_vlm(cfg)
-
     model_name = str(getattr(cfg.model, "name", MODEL_PLUGINS[model_plugin_name].base_model))
 
     registration = {
@@ -607,6 +696,7 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
+
 </script>
 
   <script type="application/x-template" id="tpl-client-manager">"""FedopsTune Client Manager — lifecycle daemon for the FL client.
@@ -1020,11 +1110,17 @@ def load_model_and_data(cfg: DictConfig):
     return model, processor, trainset, collate_fn
 </script>
 
-  <script type="application/x-template" id="tpl-generate-paramshape">"""Generate parameter_shapes.json for the configured VLM + LoRA adapter.
+  <script type="application/x-template" id="tpl-generate-paramshape">"""Generate parameter_shapes.json and parameter_names.json.
 
 Run ONCE before starting FL training:
 
     python generate_paramshape.py
+
+Outputs:
+  parameter_shapes.json — list of array shapes for FedOps server init
+  parameter_names.json  — list of param names in the same order;
+                          used by PAFA.py for component-aware QP
+                          (separate QPs for LoRA vs projector updates)
 """
 
 import json
@@ -1035,16 +1131,13 @@ import sys
 try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
-    raise ImportError(
-        "\n\nfedops-vlm-framework is not installed.\n"
-        "Install it with:\n"
-        "   pip install fedops-vlm-framework\n"
-        "Then re-run this script.\n"
-    )
+    sys.path.insert(0, os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../fedops-vlm-framework")
+    ))
 
 from omegaconf import OmegaConf
 from fedops_vlm_framework.core.registry import MODEL_PLUGINS
-from fedops.client.client_utils import get_parameters_for_llm
+from peft import get_peft_model_state_dict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)8s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -1061,25 +1154,51 @@ def generate_paramshape(
         raise ValueError(f"Unknown model plugin '{model_plugin_name}'. "
                          f"Available: {list(MODEL_PLUGINS.keys())}")
 
-    logger.info("Loading model plugin '%s' on CPU to extract LoRA parameter shapes ...",
-                model_plugin_name)
-
+    logger.info("Loading model plugin '%s' on CPU ...", model_plugin_name)
     model_plugin = MODEL_PLUGINS[model_plugin_name]
     model, _ = model_plugin.load(cfg.model, force_cpu=True)
 
-    param_arrays = get_parameters_for_llm(model)
-    shapes = [list(arr.shape) for arr in param_arrays]
+    # ── LoRA params (via PEFT) ────────────────────────────────────────
+    lora_state = get_peft_model_state_dict(model)
+    lora_names  = list(lora_state.keys())
+    lora_arrays = [v.cpu().numpy() for v in lora_state.values()]
 
-    abs_save_path = os.path.abspath(save_path)
+    # ── Projector params (regular model weights, not PEFT) ────────────
+    proj_items = [
+        (name, param.detach().cpu().numpy())
+        for name, param in model.named_parameters()
+        if "multi_modal_projector" in name and param.requires_grad
+    ]
+    proj_names  = [n for n, _ in proj_items]
+    proj_arrays = [a for _, a in proj_items]
+
+    # ── Combine: LoRA first, projector after ──────────────────────────
+    all_names  = lora_names  + proj_names
+    all_arrays = lora_arrays + proj_arrays
+    shapes = [list(arr.shape) for arr in all_arrays]
+
+    abs_save_path   = os.path.abspath(save_path)
+    names_save_path = abs_save_path.replace("parameter_shapes.json", "parameter_names.json")
+
     with open(abs_save_path, "w") as f:
         json.dump(shapes, f, indent=2)
 
-    logger.info("[OK] Saved %d LoRA parameter shapes to: %s", len(shapes), abs_save_path)
-    del model, param_arrays
+    with open(names_save_path, "w") as f:
+        json.dump(all_names, f, indent=2)
+
+    logger.info(
+        "[OK] %d params total (%d LoRA + %d projector)",
+        len(all_names), len(lora_names), len(proj_names),
+    )
+    logger.info("  shapes → %s", abs_save_path)
+    logger.info("  names  → %s", names_save_path)
+
+    del model, lora_arrays, proj_arrays
 
 
 if __name__ == "__main__":
     generate_paramshape()
+
 </script>
 
   <script type="application/x-template" id="tpl-requirements"># ============================================================
@@ -1133,6 +1252,297 @@ numpy>=1.24.0
 # Run once before training:
 #   pip install fedops-vlm-framework
 # ---------------------------------------------------------------
+</script>
+
+  <!-- ── PAFA strategy reference (shipped via fedops-vlm-framework PyPI, not bundled in zip) ── -->
+  <script type="application/x-template" id="tpl-pafa">"""PAFAStrategy — Pair-Aware Federated Aggregation.
+
+Standalone drop-in — place next to server_main.py. In conf/config.yaml set:
+
+    server:
+      strategy:
+        _target_: PAFA.PAFAStrategy          # standalone (this file)
+        # OR: fedops_vlm_framework.strategies.PAFAStrategy  (pip install fedops-vlm-framework==0.2.0)
+        pafa_lora_floor: 0.0
+
+Component-aware mode (recommended):
+  Run  python generate_paramshape.py  once before training.
+  This creates parameter_names.json alongside parameter_shapes.json.
+  When that file exists, PAFA runs two separate QPs each round:
+    - LoRA QP     : minimise directional variance across LoRA updates
+    - Projector QP: minimise directional variance across projector updates
+  with a dynamic projector floor = 1/n_clients (no hand-tuning).
+
+  Per-round gradient statistics are written to gradient_stats.json:
+    lambda_lora : mean pairwise cosine dissimilarity for LoRA updates
+    lambda_proj : mean pairwise cosine dissimilarity for projector updates
+    lambda_flat : what flat (non-component-aware) aggregation sees
+    cgh         : |lambda_lora - lambda_proj|  — Component Gradient Heterogeneity
+                  CGH > 0 means flat aggregation is sub-optimal (PAFA theorem condition).
+
+Flat mode (fallback):
+  Without parameter_names.json, a single QP is solved over all params.
+
+Both modes fall back to data-proportional FedAvg if scipy is missing
+or the QP solver fails.
+"""
+
+import json
+import logging
+import os
+from typing import Dict, List, Optional, Tuple, Union
+
+import numpy as np
+from flwr.common import (
+    FitRes,
+    Parameters,
+    Scalar,
+    ndarrays_to_parameters,
+    parameters_to_ndarrays,
+)
+from flwr.server.client_proxy import ClientProxy
+from flwr.server.strategy import FedAvg
+
+logger = logging.getLogger(__name__)
+
+_NAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parameter_names.json")
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _flatten(arrays: List[np.ndarray]) -> np.ndarray:
+    return np.concatenate([a.ravel().astype(np.float32) for a in arrays])
+
+
+def _cosine_dissimilarity_matrix(vecs: List[np.ndarray]) -> np.ndarray:
+    n = len(vecs)
+    D = np.zeros((n, n), dtype=np.float64)
+    norms = [np.linalg.norm(v) for v in vecs]
+    for i in range(n):
+        for j in range(i + 1, n):
+            ni, nj = norms[i], norms[j]
+            if ni < 1e-12 or nj < 1e-12:
+                sim = 0.0
+            else:
+                sim = float(np.dot(vecs[i].astype(np.float64), vecs[j].astype(np.float64)) / (ni * nj))
+                sim = max(-1.0, min(1.0, sim))
+            D[i, j] = D[j, i] = 1.0 - sim
+    return D
+
+
+def _solve_qp_weights(
+    vecs: List[np.ndarray],
+    data_weights: np.ndarray,
+    floor: float,
+    label: str = "",
+) -> np.ndarray:
+    """Solve  min_w w^T D w  s.t. sum(w)=1, w_i >= floor*p_i  via SLSQP."""
+    try:
+        from scipy.optimize import minimize
+    except ImportError:
+        logger.warning("[PAFA%s] scipy not installed — using data-proportional weights", label)
+        return data_weights / data_weights.sum()
+
+    n = len(vecs)
+    D = _cosine_dissimilarity_matrix(vecs)
+
+    def obj(w):
+        return float(w @ D @ w)
+
+    def jac(w):
+        return 2.0 * (D @ w)
+
+    bounds = [(float(max(0.0, floor * data_weights[i])), 1.0) for i in range(n)]
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
+    w0 = data_weights / data_weights.sum()
+
+    result = minimize(obj, w0, jac=jac, method="SLSQP",
+                      bounds=bounds, constraints=constraints,
+                      options={"ftol": 1e-9, "maxiter": 500})
+
+    if result.success:
+        w = np.clip(result.x, 0.0, 1.0)
+        s = w.sum()
+        if s > 1e-12:
+            return w / s
+
+    logger.warning("[PAFA%s] QP did not converge (%s) — using data-proportional weights",
+                   label, result.message)
+    return data_weights / data_weights.sum()
+
+
+# ── strategy ──────────────────────────────────────────────────────────────────
+
+class PAFAStrategy(FedAvg):
+    """Pair-Aware Federated Aggregation — component-aware QP aggregation.
+
+    If parameter_names.json exists (generated by generate_paramshape.py),
+    runs separate QPs for LoRA and projector updates each round and tracks:
+
+        lambda_lora : mean pairwise cosine dissimilarity for LoRA updates
+        lambda_proj : mean pairwise cosine dissimilarity for projector updates
+        lambda_flat : what flat aggregation sees (mixed LoRA+proj vectors)
+        cgh         : |lambda_lora - lambda_proj|  — Component Gradient Heterogeneity
+                      CGH > 0 means flat aggregation incurs avoidable convergence overhead.
+
+    Stats are written to gradient_stats.json next to this file after every round.
+
+    Args:
+        pafa_lora_floor: minimum weight = floor * data_weight for LoRA QP.
+            Projector floor is always 1/n_clients (dynamic, no hand-tuning).
+        All other kwargs forwarded to FedAvg.
+    """
+
+    def __init__(self, *, pafa_lora_floor: float = 0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.pafa_floor = float(pafa_lora_floor)
+        self._grad_stats: List[dict] = []
+
+        self._lora_indices: Optional[List[int]] = None
+        self._proj_indices: Optional[List[int]] = None
+
+        if os.path.exists(_NAMES_FILE):
+            with open(_NAMES_FILE) as f:
+                names = json.load(f)
+            self._lora_indices = [i for i, n in enumerate(names) if "lora_" in n]
+            self._proj_indices = [i for i, n in enumerate(names) if "multi_modal_projector" in n]
+            logger.info(
+                "[PAFA] Component-aware mode: %d LoRA + %d projector indices — "
+                "lora_floor=%.4f  proj_floor=1/n_clients",
+                len(self._lora_indices), len(self._proj_indices), self.pafa_floor,
+            )
+        else:
+            logger.info(
+                "[PAFA] Flat mode (no parameter_names.json) — floor=%.4f. "
+                "Run generate_paramshape.py for component-aware QP + CGH tracking.",
+                self.pafa_floor,
+            )
+
+    # ------------------------------------------------------------------
+    def aggregate_fit(
+        self,
+        server_round: int,
+        results: List[Tuple[ClientProxy, FitRes]],
+        failures: List[Union[Tuple[ClientProxy, FitRes], BaseException]],
+    ) -> Tuple[Optional[Parameters], Dict[str, Scalar]]:
+
+        if not results:
+            return None, {}
+
+        clients_arrays: List[List[np.ndarray]] = [
+            parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results
+        ]
+        num_examples = np.array(
+            [max(fit_res.num_examples, 1) for _, fit_res in results], dtype=np.float64
+        )
+        data_weights = num_examples / num_examples.sum()
+        n_clients = len(results)
+        n_arrays = len(clients_arrays[0])
+
+        # ── Component-aware: separate QPs for LoRA and projector ──────
+        if (self._lora_indices and self._proj_indices
+                and len(self._lora_indices) + len(self._proj_indices) <= n_arrays):
+
+            lora_vecs = [_flatten([arrays[i] for i in self._lora_indices])
+                         for arrays in clients_arrays]
+            proj_vecs = [_flatten([arrays[i] for i in self._proj_indices])
+                         for arrays in clients_arrays]
+
+            # Build D matrices once — reuse in QP and λ tracking
+            D_lora = _build_dissimilarity_matrix(lora_vecs)
+            D_proj = _build_dissimilarity_matrix(proj_vecs)
+
+            lambda_lora = _mean_lambda(D_lora)
+            lambda_proj = _mean_lambda(D_proj)
+
+            flat_vecs = [np.concatenate([lv, pv]) for lv, pv in zip(lora_vecs, proj_vecs)]
+            D_flat = _build_dissimilarity_matrix(flat_vecs)
+            lambda_flat = _mean_lambda(D_flat)
+
+            cgh = abs(lambda_lora - lambda_proj)
+
+            proj_floor = 1.0 / n_clients
+            lora_w = _solve_qp_weights(lora_vecs, data_weights,
+                                       floor=self.pafa_floor, label="/LoRA", D=D_lora)
+            proj_w = _solve_qp_weights(proj_vecs, data_weights,
+                                       floor=proj_floor, label="/Proj", D=D_proj)
+
+            logger.info(
+                "[PAFA Round %d] λ_lora=%.4f  λ_proj=%.4f  λ_flat=%.4f  CGH=%.4f\n"
+                "                LoRA  weights=%s\n"
+                "                Proj  weights=%s\n"
+                "                data_props  =%s",
+                server_round,
+                lambda_lora, lambda_proj, lambda_flat, cgh,
+                np.array2string(lora_w, precision=3, suppress_small=True),
+                np.array2string(proj_w, precision=3, suppress_small=True),
+                np.array2string(data_weights, precision=3, suppress_small=True),
+            )
+
+            self._grad_stats.append({
+                "round":        server_round,
+                "lambda_lora":  float(lambda_lora),
+                "lambda_proj":  float(lambda_proj),
+                "lambda_flat":  float(lambda_flat),
+                "cgh":          float(cgh),
+                "lora_weights": lora_w.tolist(),
+                "proj_weights": proj_w.tolist(),
+                "data_weights": data_weights.tolist(),
+            })
+            try:
+                with open(_STATS_FILE, "w") as f:
+                    json.dump(self._grad_stats, f, indent=2)
+            except Exception as exc:
+                logger.warning("[PAFA] Could not write gradient_stats.json: %s", exc)
+
+            lora_set = set(self._lora_indices)
+            proj_set = set(self._proj_indices)
+            aggregated: List[np.ndarray] = []
+            for idx in range(n_arrays):
+                w = lora_w if idx in lora_set else proj_w if idx in proj_set else data_weights
+                agg = sum(w[i] * clients_arrays[i][idx].astype(np.float32)
+                          for i in range(n_clients))
+                aggregated.append(agg)
+
+        # ── Flat fallback: single QP over all params ──────────────────
+        else:
+            vecs = [_flatten(arrays) for arrays in clients_arrays]
+            D_flat = _build_dissimilarity_matrix(vecs)
+            lambda_flat = _mean_lambda(D_flat)
+            weights = _solve_qp_weights(vecs, data_weights,
+                                        floor=self.pafa_floor, label="", D=D_flat)
+            logger.info(
+                "[PAFA Round %d] flat λ=%.4f  weights=%s  (data_props=%s)",
+                server_round, lambda_flat,
+                np.array2string(weights, precision=3, suppress_small=True),
+                np.array2string(data_weights, precision=3, suppress_small=True),
+            )
+            self._grad_stats.append({
+                "round":        server_round,
+                "lambda_flat":  float(lambda_flat),
+                "weights":      weights.tolist(),
+                "data_weights": data_weights.tolist(),
+            })
+            try:
+                with open(_STATS_FILE, "w") as f:
+                    json.dump(self._grad_stats, f, indent=2)
+            except Exception as exc:
+                logger.warning("[PAFA] Could not write gradient_stats.json: %s", exc)
+            aggregated = [
+                sum(weights[i] * clients_arrays[i][idx].astype(np.float32)
+                    for i in range(n_clients))
+                for idx in range(n_arrays)
+            ]
+
+        parameters_aggregated = ndarrays_to_parameters(aggregated)
+
+        metrics_aggregated: Dict[str, Scalar] = {}
+        if self.fit_metrics_aggregation_fn:
+            fit_metrics = [(fit_res.num_examples, fit_res.metrics) for _, fit_res in results]
+            metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
+
+        return parameters_aggregated, metrics_aggregated
+
 </script>
 
   <!-- ── MAIN JS ── -->
@@ -1265,15 +1675,40 @@ finetune:
   lora_dropout: 0.05
 
 server:
+  # ── Aggregation strategy ──────────────────────────────────────────────────
+${ strategy === 'pafa' ? `  # Option A: standard FedAvg (commented — using FedMAP below)
+  # strategy:
+  #   _target_: flwr.server.strategy.FedAvg
+  #   fraction_fit: 1.0
+  #   fraction_evaluate: 0.0
+  #   min_fit_clients: ${minClients}
+  #   min_evaluate_clients: 0
+  #   min_available_clients: ${minClients}
+  # Option B (active): FedMAP — Pair-Aware Federated Aggregation
   strategy:
-    _target_: ${ strategy === 'pafa' ? 'fedops_vlm_framework.strategies.PAFAStrategy' : 'flwr.server.strategy.FedAvg' }
+    _target_: fedops_vlm_framework.strategies.PAFAStrategy
+    pafa_lora_floor: 0.0
     fraction_fit: 1.0
     fraction_evaluate: 0.0
     min_fit_clients: ${minClients}
     min_evaluate_clients: 0
-    min_available_clients: ${minClients}${strategy === 'pafa' ? `
-    pafa_lora_floor: 0.0
-    # pafa_projector_floor: auto (= 1/n_clients each round)` : ''}
+    min_available_clients: ${minClients}` : `  # Option A (active): standard FedAvg
+  strategy:
+    _target_: flwr.server.strategy.FedAvg
+    fraction_fit: 1.0
+    fraction_evaluate: 0.0
+    min_fit_clients: ${minClients}
+    min_evaluate_clients: 0
+    min_available_clients: ${minClients}
+  # Option B: FedMAP — Pair-Aware Federated Aggregation (pip install fedops-vlm-framework)
+  # strategy:
+  #   _target_: fedops_vlm_framework.strategies.PAFAStrategy
+  #   pafa_lora_floor: 0.0
+  #   fraction_fit: 1.0
+  #   fraction_evaluate: 0.0
+  #   min_fit_clients: ${minClients}
+  #   min_evaluate_clients: 0
+  #   min_available_clients: ${minClients}` }
 
 wandb:
   use: false
@@ -1326,7 +1761,7 @@ wandb:
         <div class="bg-blue-950 border border-blue-800 rounded-lg px-4 py-2 text-sm text-blue-300">Model: ${m.label}</div>
         <div class="bg-green-950 border border-green-800 rounded-lg px-4 py-2 text-sm text-green-300">Dataset: ${d.label}</div>
         <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-400 mono">${document.getElementById('cfg-rounds').value} rounds × ${document.getElementById('cfg-steps').value} steps</div>
-        <div class="bg-${document.getElementById('cfg-strategy').value === 'pafa' ? 'purple-950 border-purple-800 text-purple-300' : 'slate-800 border-slate-700 text-slate-400'} border rounded-lg px-4 py-2 text-sm mono">${document.getElementById('cfg-strategy').value === 'pafa' ? 'PAFA-QP' : 'FedAvg'}</div>
+        <div class="bg-${document.getElementById('cfg-strategy').value === 'pafa' ? 'purple-950 border-purple-800 text-purple-300' : 'slate-800 border-slate-700 text-slate-400'} border rounded-lg px-4 py-2 text-sm mono">${document.getElementById('cfg-strategy').value === 'pafa' ? 'FedMAP' : 'FedAvg'}</div>
         <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-400 mono">LoRA r=${document.getElementById('cfg-lora-r').value} | ${document.getElementById('cfg-quant').value === '0' ? 'fp32' : document.getElementById('cfg-quant').value + '-bit'}</div>
       `;
     }
@@ -1372,6 +1807,9 @@ wandb:
         root.file(filename, content);
       }
 
+      // PAFA is shipped via PyPI (fedops-vlm-framework) — no standalone file needed
+      const strategy = document.getElementById('cfg-strategy').value;
+
       // Generated config.yaml
       root.folder('conf').file('config.yaml', yaml);
 
@@ -1381,16 +1819,17 @@ wandb:
         JSON.stringify(shapesMap[selectedModel], null, 2));
 
       // README
+      const isPafa = strategy === 'pafa';
       const readme = `# FedopsTune — ${m.label} × ${d.label}
 
 Downloaded from FedopsTune Hub.
+Aggregation strategy: ${isPafa ? 'FedMAP — Pair-Aware Federated Aggregation (fedops-vlm-framework)' : 'FedAvg (baseline)'}
 
 ## Setup
 
 1. Install dependencies:
    pip install -r requirements.txt
-
-   pip install fedops-vlm-framework
+   pip install fedops-vlm-framework  # includes FedMAP strategy
 
 ${m.hasShapes ? '2. parameter_shapes.json is already included.\n' : '2. Generate parameter shapes (run ONCE before server start):\n   python generate_paramshape.py\n'}
 3. Start FL Server (K8s pod or local):
@@ -1413,7 +1852,7 @@ Edit conf/config.yaml to change:
   - max_steps_per_round : gradient steps per round
   - model.quantization  : 0=fp32, 4=QLoRA, 8=int8
   - server.strategy.min_available_clients : clients required per round
-`;
+${isPafa ? `\n## FedMAP Strategy\n\nFedMAP (Pair-Aware Federated Aggregation) is provided via the PyPI package:\n  pip install fedops-vlm-framework\n\nconf/config.yaml is pre-configured to use:\n  _target_: fedops_vlm_framework.strategies.PAFAStrategy\n\nFedMAP writes gradient_stats.json each round with:\n  lambda_lora, lambda_proj, lambda_flat, cgh (Component Gradient Heterogeneity)\n  CGH > 0 means FedMAP achieves a strictly tighter convergence bound than FedAvg.\n\nTo switch to FedAvg: edit conf/config.yaml — comment the FedMAP block, uncomment FedAvg.\n` : ''}`;
       root.file('README.md', readme);
 
       // Generate and save
