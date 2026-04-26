@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FedopsMultimodal Setup — Federated VLM Fine-Tuning</title>
+  <title>FedopsTune Hub — Federated VLM Fine-Tuning</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
@@ -63,7 +63,7 @@
         Federated Learning · Vision Language Models · FedOps
       </div>
       <h1 class="text-5xl font-bold mb-4">
-        <span class="gradient-text">Fedops-Multimodal</span> Setup
+        <span class="gradient-text">FedopsTune</span> Hub
       </h1>
       <p class="text-slate-400 text-lg max-w-2xl mx-auto mb-8">
         Select your model and dataset, configure FL training, and download a ready-to-run
@@ -173,27 +173,51 @@
         </div>
 
         <div class="dataset-card cursor-pointer rounded-xl border border-slate-700 bg-slate-900 p-5 transition-all hover:border-green-600"
-             data-dataset="finance_vqa" onclick="selectDataset(this)">
+             data-dataset="path_vqa" onclick="selectDataset(this)">
           <div class="flex items-center gap-3 mb-2">
-            <span class="text-2xl">📈</span>
+            <span class="text-2xl">🔬</span>
             <div>
-              <div class="font-semibold">Finance VQA</div>
-              <div class="text-xs text-slate-400 mono">sujet-ai/sujet-finance-qa-vision</div>
+              <div class="font-semibold">PathVQA</div>
+              <div class="text-xs text-slate-400 mono">flaviagiammarino/path-vqa</div>
             </div>
           </div>
-          <p class="text-xs text-slate-400">Financial chart and document visual QA — 100k samples for financial analysis tasks.</p>
+          <p class="text-xs text-slate-400">Pathology visual QA — histology and microscopy images with yes/no and open-ended clinical questions (~19.7K train).</p>
         </div>
 
         <div class="dataset-card cursor-pointer rounded-xl border border-slate-700 bg-slate-900 p-5 transition-all hover:border-green-600"
-             data-dataset="legal_docvqa" onclick="selectDataset(this)">
+             data-dataset="slake" onclick="selectDataset(this)">
           <div class="flex items-center gap-3 mb-2">
-            <span class="text-2xl">⚖️</span>
+            <span class="text-2xl">🧠</span>
             <div>
-              <div class="font-semibold">Legal DocVQA</div>
-              <div class="text-xs text-slate-400 mono">Rickkosse/dutch-legal-docvqa</div>
+              <div class="font-semibold">SLAKE</div>
+              <div class="text-xs text-slate-400 mono">mdwiratathya/SLAKE-vqa-english</div>
             </div>
           </div>
-          <p class="text-xs text-slate-400">Dutch legal document visual QA — scanned legal documents with structured question answering.</p>
+          <p class="text-xs text-slate-400">Multi-organ medical VQA — brain, chest, abdomen across X-ray, CT, MRI. English subset (~4.9K train, 1K test).</p>
+        </div>
+
+        <div class="dataset-card cursor-pointer rounded-xl border border-slate-700 bg-slate-900 p-5 transition-all hover:border-green-600"
+             data-dataset="chartqa" onclick="selectDataset(this)">
+          <div class="flex items-center gap-3 mb-2">
+            <span class="text-2xl">📊</span>
+            <div>
+              <div class="font-semibold">ChartQA</div>
+              <div class="text-xs text-slate-400 mono">HuggingFaceM4/ChartQA</div>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400">Chart and figure visual QA — reasoning over bar charts, line graphs, and pie charts (~18K train).</p>
+        </div>
+
+        <div class="dataset-card cursor-pointer rounded-xl border border-slate-700 bg-slate-900 p-5 transition-all hover:border-green-600"
+             data-dataset="docvqa" onclick="selectDataset(this)">
+          <div class="flex items-center gap-3 mb-2">
+            <span class="text-2xl">📄</span>
+            <div>
+              <div class="font-semibold">DocVQA</div>
+              <div class="text-xs text-slate-400 mono">HuggingFaceM4/DocVQA</div>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400">Document visual QA — scanned business and industrial documents with information extraction questions (~10K train).</p>
         </div>
 
       </div>
@@ -257,6 +281,17 @@
                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:outline-none focus:border-blue-500 mono"
                  oninput="updatePreview()" />
           <p class="text-xs text-slate-500 mt-1">Clients required per round</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">Aggregation Strategy <span class="text-slate-500 font-normal">(server.strategy)</span></label>
+          <select id="cfg-strategy"
+                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:outline-none focus:border-blue-500 mono"
+                  onchange="updatePreview()">
+            <option value="fedavg" selected>FedAvg (baseline)</option>
+            <option value="pafa">PAFA-QP (component-aware)</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">PAFA-QP solves separate QPs for LoRA and projector — better for non-IID</p>
         </div>
 
         <div>
@@ -1125,10 +1160,12 @@ numpy>=1.24.0
     };
 
     const DATASETS = {
-      vqa_rad:      { label: 'VQA-RAD',       plugin: 'vqa_rad',      name: 'vqa_rad',       hf: 'flaviagiammarino/vqa-rad' },
-      vqav2:        { label: 'VQAv2',          plugin: 'vqav2',        name: 'vqav2',         hf: 'HuggingFaceM4/VQAv2' },
-      finance_vqa:  { label: 'Finance VQA',    plugin: 'finance_vqa',  name: 'finance_vqa',   hf: 'sujet-ai/sujet-finance-qa-vision-100k' },
-      legal_docvqa: { label: 'Legal DocVQA',   plugin: 'legal_docvqa', name: 'legal_docvqa',  hf: 'Rickkosse/dutch-legal-docvqa' },
+      vqa_rad:  { label: 'VQA-RAD',   plugin: 'vqa_rad',  name: 'vqa_rad',  hf: 'flaviagiammarino/vqa-rad' },
+      vqav2:    { label: 'VQAv2',     plugin: 'vqav2',    name: 'vqav2',    hf: 'lmms-lab/VQAv2' },
+      path_vqa: { label: 'PathVQA',   plugin: 'path_vqa', name: 'path_vqa', hf: 'flaviagiammarino/path-vqa' },
+      slake:    { label: 'SLAKE',     plugin: 'slake',    name: 'slake',    hf: 'mdwiratathya/SLAKE-vqa-english' },
+      chartqa:  { label: 'ChartQA',   plugin: 'chartqa',  name: 'chartqa',  hf: 'HuggingFaceM4/ChartQA' },
+      docvqa:   { label: 'DocVQA',    plugin: 'docvqa',   name: 'docvqa',   hf: 'HuggingFaceM4/DocVQA' },
     };
 
     // PhiVA pre-generated parameter shapes (200 LoRA tensors)
@@ -1174,6 +1211,7 @@ numpy>=1.24.0
       const quant      = parseInt(document.getElementById('cfg-quant').value);
       const minClients = parseInt(document.getElementById('cfg-min-clients').value) || 1;
       const lr         = document.getElementById('cfg-lr').value;
+      const strategy   = document.getElementById('cfg-strategy').value;
 
       return `# ============================================================
 # FedopsTune — Hydra configuration
@@ -1228,12 +1266,14 @@ finetune:
 
 server:
   strategy:
-    _target_: flwr.server.strategy.FedAvg
+    _target_: ${ strategy === 'pafa' ? 'fedops_vlm_framework.strategies.PAFAStrategy' : 'flwr.server.strategy.FedAvg' }
     fraction_fit: 1.0
     fraction_evaluate: 0.0
     min_fit_clients: ${minClients}
     min_evaluate_clients: 0
-    min_available_clients: ${minClients}
+    min_available_clients: ${minClients}${strategy === 'pafa' ? `
+    pafa_lora_floor: 0.0
+    # pafa_projector_floor: auto (= 1/n_clients each round)` : ''}
 
 wandb:
   use: false
@@ -1286,6 +1326,7 @@ wandb:
         <div class="bg-blue-950 border border-blue-800 rounded-lg px-4 py-2 text-sm text-blue-300">Model: ${m.label}</div>
         <div class="bg-green-950 border border-green-800 rounded-lg px-4 py-2 text-sm text-green-300">Dataset: ${d.label}</div>
         <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-400 mono">${document.getElementById('cfg-rounds').value} rounds × ${document.getElementById('cfg-steps').value} steps</div>
+        <div class="bg-${document.getElementById('cfg-strategy').value === 'pafa' ? 'purple-950 border-purple-800 text-purple-300' : 'slate-800 border-slate-700 text-slate-400'} border rounded-lg px-4 py-2 text-sm mono">${document.getElementById('cfg-strategy').value === 'pafa' ? 'PAFA-QP' : 'FedAvg'}</div>
         <div class="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-400 mono">LoRA r=${document.getElementById('cfg-lora-r').value} | ${document.getElementById('cfg-quant').value === '0' ? 'fp32' : document.getElementById('cfg-quant').value + '-bit'}</div>
       `;
     }
