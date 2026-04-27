@@ -354,6 +354,7 @@
           <div class="flex items-center gap-2"><span class="text-blue-400">py</span> data_preparation.py</div>
           <div class="flex items-center gap-2"><span class="text-blue-400">py</span> generate_paramshape.py</div>
           <div class="flex items-center gap-2"><span class="text-yellow-400">txt</span> requirements.txt</div>
+          <div class="flex items-center gap-2"><span class="text-green-400">sh</span> setup.sh</div>
           <div class="flex items-center gap-2"><span class="text-green-400">yaml</span> conf/config.yaml</div>
           <div id="shapes-indicator" class="flex items-center gap-2"><span class="text-orange-400">json</span> parameter_shapes.json</div>
         </div>
@@ -378,9 +379,9 @@
           <div class="font-medium text-slate-200 mb-1">1. Download &amp; Setup</div>
           <div class="text-slate-400 text-xs space-y-1">
             <div>Unzip <code class="text-blue-300">FedOps-Multimodal-Setup.zip</code></div>
-            <div class="pt-1 text-slate-500">fedops pins transformers==4.43.1 but LLaVA needs ≥4.45 — install in two steps:</div>
-            <div><code class="text-slate-300">pip install "fedops>=1.1.30.0" --no-deps</code></div>
-            <div><code class="text-slate-300">pip install -r requirements.txt</code></div>
+            <div class="pt-1">Then run the included setup script:</div>
+            <div><code class="text-slate-300">bash setup.sh</code></div>
+            <div class="pt-1 text-slate-500">(Handles the fedops↔transformers version conflict automatically)</div>
           </div>
         </div>
         <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
@@ -1254,6 +1255,9 @@ scikit-learn
 numpy>=1.24.0
 scipy>=1.11.0
 
+# FedOps deps (installed via --no-deps, so these must be explicit)
+optuna>=3.6
+
 # FedOps VLM framework — model/dataset plugins + FedMAP strategy
 fedops-vlm-framework>=0.2.0
 </script>
@@ -1549,6 +1553,29 @@ class PAFAStrategy(FedAvg):
 
 </script>
 
+  <script type="application/x-template" id="tpl-setup-sh">#!/bin/bash
+# FedOps-Multimodal — one-command setup
+# Run: bash setup.sh
+#
+# Why two steps?
+# fedops pins transformers==4.43.1 but LLaVA-OneVision needs >=4.45.0.
+# --no-deps skips that pin; fedops itself runs fine with 4.45+.
+
+set -e
+
+echo "[1/2] Installing fedops (no-deps to skip transformers pin)..."
+pip install "fedops>=1.1.30.0" --no-deps
+
+echo "[2/2] Installing remaining dependencies..."
+pip install -r requirements.txt
+
+echo ""
+echo "Setup complete. Run:"
+echo "  Terminal 1: python server_main.py"
+echo "  Terminal 2: python client_main.py"
+echo "  Terminal 3: python client_manager_main.py"
+</script>
+
   <!-- ── MAIN JS ── -->
   <script>
     // ── Model & Dataset configs ──────────────────────────────────────
@@ -1805,6 +1832,7 @@ wandb:
         'data_preparation.py':   'tpl-data-preparation',
         'generate_paramshape.py':'tpl-generate-paramshape',
         'requirements.txt':      'tpl-requirements',
+        'setup.sh':              'tpl-setup-sh',
       };
 
       for (const [filename, tplId] of Object.entries(files)) {
@@ -1839,9 +1867,9 @@ Aggregation strategy: ${isPafa ? 'FedMAP — Pair-Aware Federated Aggregation (f
 
 ## Setup
 
-1. Install dependencies (two steps — fedops pins transformers==4.43.1 which conflicts with LLaVA):
-   pip install "fedops>=1.1.30.0" --no-deps
-   pip install -r requirements.txt
+1. Install dependencies (one command):
+   bash setup.sh
+   (setup.sh handles the fedops↔transformers version conflict automatically)
 
 ${isPafa && selectedModel === 'onevision'
   ? '2. parameter_shapes.json and parameter_names.json are pre-bundled (496 params: 492 LoRA + 4 projector).\n'
