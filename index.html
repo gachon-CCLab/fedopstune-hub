@@ -378,10 +378,9 @@
           <div class="font-medium text-slate-200 mb-1">1. Download &amp; Setup</div>
           <div class="text-slate-400 text-xs space-y-1">
             <div>Unzip <code class="text-blue-300">FedOps-Multimodal-Setup.zip</code></div>
+            <div class="pt-1 text-slate-500">fedops pins transformers==4.43.1 but LLaVA needs ≥4.45 — install in two steps:</div>
+            <div><code class="text-slate-300">pip install "fedops>=1.1.30.0" --no-deps</code></div>
             <div><code class="text-slate-300">pip install -r requirements.txt</code></div>
-            <div class="text-slate-500">(installs fedops, flwr, torch, transformers etc. automatically)</div>
-            <div class="pt-1"><code class="text-slate-300">pip install fedops-vlm-framework</code></div>
-            <div class="text-slate-500">(available on PyPI — no source clone needed)</div>
           </div>
         </div>
         <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
@@ -1204,9 +1203,14 @@ if __name__ == "__main__":
   <script type="application/x-template" id="tpl-requirements"># ============================================================
 # FedOps-Multimodal dependencies
 # ============================================================
-
-# FedOps PyPI — FL lifecycle management
-fedops>=1.1.30.0
+#
+# IMPORTANT — install fedops separately FIRST to avoid a transformers version conflict:
+#   pip install "fedops>=1.1.30.0" --no-deps
+#   pip install -r requirements.txt
+#
+# fedops pins transformers==4.43.1 but LLaVA-OneVision needs >=4.45.0.
+# --no-deps skips fedops's strict pin; fedops itself runs fine with 4.45+.
+# ============================================================
 
 # Flower — federated learning backend
 flwr>=1.0.0,<2.0.0
@@ -1835,7 +1839,8 @@ Aggregation strategy: ${isPafa ? 'FedMAP — Pair-Aware Federated Aggregation (f
 
 ## Setup
 
-1. Install dependencies:
+1. Install dependencies (two steps — fedops pins transformers==4.43.1 which conflicts with LLaVA):
+   pip install "fedops>=1.1.30.0" --no-deps
    pip install -r requirements.txt
 
 ${isPafa && selectedModel === 'onevision'
