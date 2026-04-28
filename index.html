@@ -453,10 +453,8 @@ try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
     raise ImportError(
-        "\n\nfedops-vlm-framework is not installed.\n"
-        "Install it with:\n"
-        "   pip install fedops-vlm-framework\n"
-        "Then re-run this script.\n"
+        "fedops-vlm-framework is not installed. "
+        "Install it with: pip install fedops-vlm-framework"
     )
 
 import hydra
@@ -1051,10 +1049,8 @@ try:
     import fedops_vlm_framework  # noqa: F401
 except ImportError:
     raise ImportError(
-        "\n\nfedops-vlm-framework is not installed.\n"
-        "Install it with:\n"
-        "   pip install fedops-vlm-framework\n"
-        "Then re-run this script.\n"
+        "fedops-vlm-framework is not installed. "
+        "Install it with: pip install fedops-vlm-framework"
     )
 
 from omegaconf import DictConfig
@@ -1476,10 +1472,8 @@ class PAFAStrategy(FedAvg):
                                        floor=proj_floor, label="/Proj", D=D_proj)
 
             logger.info(
-                "[PAFA Round %d] λ_lora=%.4f  λ_proj=%.4f  λ_flat=%.4f  CGH=%.4f\n"
-                "                LoRA  weights=%s\n"
-                "                Proj  weights=%s\n"
-                "                data_props  =%s",
+                "[PAFA Round %d] lambda_lora=%.4f  lambda_proj=%.4f  lambda_flat=%.4f  CGH=%.4f"
+                "  lora_w=%s  proj_w=%s  data=%s",
                 server_round,
                 lambda_lora, lambda_proj, lambda_flat, cgh,
                 np.array2string(lora_w, precision=3, suppress_small=True),
@@ -1663,7 +1657,7 @@ echo "  Terminal 3: python client_manager_main.py"
 # ============================================================
 
 random_seed: 42
-task_id: "fedops-multimodal"
+task_id: "fedopstune2"
 model_type: "Huggingface"
 
 model:
@@ -1872,10 +1866,12 @@ Aggregation strategy: ${isPafa ? 'FedMAP — Pair-Aware Federated Aggregation (f
    (setup.sh handles the fedops↔transformers version conflict automatically)
 
 ${isPafa && selectedModel === 'onevision'
-  ? '2. parameter_shapes.json and parameter_names.json are pre-bundled (496 params: 492 LoRA + 4 projector).\n'
+  ? `2. parameter_shapes.json and parameter_names.json are pre-bundled (496 params: 492 LoRA + 4 projector).`
   : m.hasShapes
-    ? '2. parameter_shapes.json is already included. Run once to generate parameter_names.json:\n   python generate_paramshape.py\n'
-    : '2. Generate parameter shapes (run ONCE before server start):\n   python generate_paramshape.py\n'
+    ? `2. parameter_shapes.json is already included. Run once to generate parameter_names.json:
+   python generate_paramshape.py`
+    : `2. Generate parameter shapes (run ONCE before server start):
+   python generate_paramshape.py`
 }
 3. Start FL Server (K8s pod or local):
    python server_main.py
@@ -1897,7 +1893,22 @@ Edit conf/config.yaml to change:
   - max_steps_per_round : gradient steps per round
   - model.quantization  : 0=fp32, 4=QLoRA, 8=int8
   - server.strategy.min_available_clients : clients required per round
-${isPafa ? `\n## FedMAP Strategy\n\nFedMAP (Pair-Aware Federated Aggregation) is provided via the PyPI package:\n  pip install fedops-vlm-framework\n\nconf/config.yaml is pre-configured to use:\n  _target_: fedops_vlm_framework.strategies.PAFAStrategy\n\nFedMAP writes gradient_stats.json each round with:\n  lambda_lora, lambda_proj, lambda_flat, cgh (Component Gradient Heterogeneity)\n  CGH > 0 means FedMAP achieves a strictly tighter convergence bound than FedAvg.\n\nTo switch to FedAvg: edit conf/config.yaml — comment the FedMAP block, uncomment FedAvg.\n` : ''}`;
+${isPafa ? `
+
+## FedMAP Strategy
+
+FedMAP (Pair-Aware Federated Aggregation) is provided via the PyPI package:
+  pip install fedops-vlm-framework
+
+conf/config.yaml is pre-configured to use:
+  _target_: fedops_vlm_framework.strategies.PAFAStrategy
+
+FedMAP writes gradient_stats.json each round with:
+  lambda_lora, lambda_proj, lambda_flat, cgh (Component Gradient Heterogeneity)
+  CGH > 0 means FedMAP achieves a strictly tighter convergence bound than FedAvg.
+
+To switch to FedAvg: edit conf/config.yaml — comment the FedMAP block, uncomment FedAvg.
+` : ''}`;
       root.file('README.md', readme);
 
       // Generate and save
